@@ -84,6 +84,10 @@ main{max-width:1180px;margin:0 auto;padding:28px 32px 80px}
 .mbody{padding:24px 30px}
 .mbody pre{font-family:"Exo 2",ui-monospace,monospace;font-weight:300;font-size:13.5px;line-height:1.62;white-space:pre-wrap;word-wrap:break-word;background:var(--wash);border:1px solid var(--border);border-radius:10px;padding:20px 22px;margin:0;color:var(--ink);max-height:52vh;overflow-y:auto}
 .mbody pre .ph{background:rgba(123,173,224,.28);color:var(--navy);border-radius:4px;padding:0 3px;font-weight:600}
+.mbody pre .phfield{font-family:"Exo 2",ui-monospace,monospace;font-weight:600;font-size:13.5px;line-height:1.62;color:var(--navy);background:rgba(123,173,224,.28);border:none;border-bottom:1px dashed var(--steel);border-radius:4px 4px 0 0;padding:0 5px;margin:0 1px;outline:none;vertical-align:baseline;min-width:2ch}
+.mbody pre .phfield::placeholder{color:var(--steel);font-weight:600;opacity:.85}
+.mbody pre .phfield:focus{background:rgba(123,173,224,.5);box-shadow:0 0 0 2px rgba(95,129,178,.22)}
+.mbody pre .phfield.filled{background:rgba(112,169,161,.24);border-bottom-color:var(--sage);color:#2f5d56}
 .mfoot{padding:18px 30px 26px;display:flex;gap:10px;align-items:center}
 .mfoot .btn{flex:none;padding:11px 22px}
 .hint{font-size:12px;color:var(--muted);margin-left:auto}
@@ -143,7 +147,8 @@ main{max-width:1180px;margin:0 auto;padding:28px 32px 80px}
     <div class="mbody"><pre id="mBody"></pre></div>
     <div class="mfoot">
       <button class="btn primary" id="mCopy">Copy prompt</button>
-      <span class="hint">Bracketed values like [PORTCO] are placeholders to fill before running.</span>
+      <button class="btn ghost" id="mReset" style="flex:none;padding:11px 18px;display:none">Reset fields</button>
+      <span class="hint" id="mHint"></span>
     </div>
   </div>
 </div>
@@ -229,15 +234,87 @@ function fallback(text,done){
   document.body.appendChild(ta);ta.select();try{document.execCommand("copy");done();}catch(e){}document.body.removeChild(ta);
 }
 
-let currentId=null;
+let currentId=null, currentTokenMap=null;
+const PH_RE=/\[[^\]\n]{1,40}\]/g;
+const DATE_TOKENS=["today","date","today's date","todays date","current date"];
+
+function todayStr(){
+  return new Date().toLocaleDateString("en-US",{year:"numeric",month:"long",day:"numeric"});
+}
+
+let _measurer=null;
+function sizeInput(inp){
+  if(!_measurer){
+    _measurer=document.createElement("span");
+    _measurer.style.cssText="position:absolute;top:-9999px;left:-9999px;visibility:hidden;white-space:pre;font-family:'Exo 2',ui-monospace,monospace;font-weight:600;font-size:13.5px";
+    document.body.appendChild(_measurer);
+  }
+  _measurer.textContent=inp.value||inp.placeholder||"";
+  inp.style.width=(_measurer.offsetWidth+16)+"px";
+}
+
+function updateFillHint(){
+  const hint=document.getElementById("mHint"), reset=document.getElementById("mReset");
+  if(!currentTokenMap){hint.textContent="";reset.style.display="none";return;}
+  const tokens=Object.keys(currentTokenMap);
+  if(!tokens.length){hint.textContent="No placeholders — ready to copy.";reset.style.display="none";return;}
+  const filled=tokens.filter(t=>currentTokenMap[t][0].value.trim()!=="").length;
+  hint.textContent=filled+" of "+tokens.length+" field"+(tokens.length>1?"s":"")+" filled";
+  reset.style.display="";
+}
+
+function renderFillBody(body){
+  const pre=document.getElementById("mBody");
+  pre.innerHTML="";
+  const map={};
+  let last=0, m;
+  PH_RE.lastIndex=0;
+  while((m=PH_RE.exec(body))){
+    if(m.index>last) pre.appendChild(document.createTextNode(body.slice(last,m.index)));
+    const token=m[0], inner=token.slice(1,-1).trim();
+    const inp=document.createElement("input");
+    inp.type="text"; inp.className="phfield"; inp.placeholder=token;
+    inp.setAttribute("spellcheck","false"); inp.setAttribute("aria-label","Fill in "+inner);
+    if(DATE_TOKENS.indexOf(inner.toLowerCase())>-1){inp.value=todayStr();inp.classList.add("filled");}
+    pre.appendChild(inp);
+    (map[token]=map[token]||[]).push(inp);
+    last=PH_RE.lastIndex;
+  }
+  if(last<body.length) pre.appendChild(document.createTextNode(body.slice(last)));
+
+  Object.keys(map).forEach(token=>{
+    const list=map[token];
+    list.forEach(inp=>{
+      inp.addEventListener("input",()=>{
+        list.forEach(o=>{ if(o!==inp) o.value=inp.value; });
+        list.forEach(o=>{ o.classList.toggle("filled", o.value.trim()!==""); sizeInput(o); });
+        updateFillHint();
+      });
+    });
+  });
+  currentTokenMap=map;
+  pre.querySelectorAll(".phfield").forEach(sizeInput);
+}
+
+function assembleCurrent(body){
+  PH_RE.lastIndex=0;
+  return body.replace(PH_RE, token=>{
+    const list=currentTokenMap && currentTokenMap[token];
+    return (list && list[0].value.trim()!=="") ? list[0].value : token;
+  });
+}
+
 function openModal(p){
   currentId=p.id;
   document.getElementById("mCat").textContent=p.category;
   document.getElementById("mTitle").textContent=p.title;
   document.getElementById("mSrc").textContent=p.source;
-  document.getElementById("mBody").innerHTML=highlightPH(p.body);
+  renderFillBody(p.body);
   const mc=document.getElementById("mCopy");mc.textContent="Copy prompt";mc.classList.remove("copied");
+  updateFillHint();
   document.getElementById("overlay").classList.add("open");
+  const firstEmpty=document.getElementById("mBody").querySelector(".phfield:not(.filled)");
+  if(firstEmpty) setTimeout(()=>firstEmpty.focus(),60);
 }
 function closeModal(){document.getElementById("overlay").classList.remove("open");}
 
@@ -247,7 +324,11 @@ document.getElementById("grid").addEventListener("click",e=>{
   if(vw){const p=DATA.prompts.find(x=>x.id===vw.dataset.view);openModal(p);}
 });
 document.getElementById("mCopy").addEventListener("click",e=>{
-  const p=DATA.prompts.find(x=>x.id===currentId);copyText(p.body,e.target);
+  const p=DATA.prompts.find(x=>x.id===currentId);copyText(assembleCurrent(p.body),e.target);
+});
+document.getElementById("mReset").addEventListener("click",()=>{
+  const p=DATA.prompts.find(x=>x.id===currentId);
+  renderFillBody(p.body);updateFillHint();
 });
 document.getElementById("close").addEventListener("click",closeModal);
 document.getElementById("overlay").addEventListener("click",e=>{if(e.target.id==="overlay")closeModal();});
